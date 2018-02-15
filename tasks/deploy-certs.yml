@@ -1,0 +1,40 @@
+---
+# these tasks approximate the format used by certbot
+# ie. the certs are in /etc/letsencrypt/archive and every copy creates backups
+# this means that the newest one is always one without backup prefix
+# active certs are in /etc/letsencrypt/live and link to newest ones in archive
+- name: Ensure the archive and live directories exist
+  become: yes
+  file: path={{ item }} state=directory mode=0755
+  with_items:
+    - /etc/letsencrypt/archive/{{ key_name }}
+    - /etc/letsencrypt/live/{{ key_name }}
+
+- name: Copying issued certificates to servers
+  become: yes
+  copy: src={{ keypath }}-fullchain.pem
+        dest=/etc/letsencrypt/archive/{{ key_name }}/fullchain.pem
+        owner=root
+        group=root
+        directory_mode=0755
+        mode=0444
+        backup=yes
+
+- name: Copying new keys to servers
+  become: yes
+  copy: src={{ keypath }}.key
+        dest=/etc/letsencrypt/archive/{{ key_name }}/privkey.pem
+        owner=root
+        group=root
+        directory_mode=0750
+        mode=0440
+        backup=yes
+
+- name: Ensure the link to newest certificate exists
+  become: yes
+  file: src={{ item.source }} path={{ item.dest }} state=link
+  with_items:
+    - source: /etc/letsencrypt/archive/{{ key_name }}/fullchain.pem
+      dest: /etc/letsencrypt/live/{{ key_name }}/fullchain.pem
+    - source: /etc/letsencrypt/archive/{{ key_name }}/privkey.pem
+      dest: /etc/letsencrypt/live/{{ key_name }}/privkey.pem

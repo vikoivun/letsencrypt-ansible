@@ -4,9 +4,24 @@
     msg: "dns_provider must be defined for dns-01 DNS challenge"
   when: "challenge == 'dns-01' and dns_provider is undefined"
 
+- name: Construct key path/name prefix
+  set_fact: keypath="{{ keys_path }}/{{ key_name }}/{{ key_name }}"
+  tags:
+  - issue-tls-certs-newkey
+  - issue-tls-certs
+  - create-tls-keys
+  - create-tls-csr
+  - deploy-certs
+  - get-tls-chain
+
+- debug: var=keypath
+
+- name: Ensure key storage path exists
+  local_action: file path={{ keys_path }}/{{ key_name }} state=directory
+
 - block:
   - name: "Creating private key for domains {{ ', '.join(domains) }}"
-    local_action: command python {{ role_path }}/code/certtool.py gen-key --key "{{ keys_path }}{{ key_name }}.key" --algorithm {{ algorithm }} --key-length {{ key_length }}
+    local_action: command python {{ role_path }}/code/certtool.py gen-key --key "{{ keypath }}.key" --algorithm {{ algorithm }} --key-length {{ key_length }}
     run_once: True
   tags:
   - issue-tls-certs-newkey
@@ -14,7 +29,7 @@
 
 - block:
   - name: "Creating CSR for domains {{ ', '.join(domains) }}"
-    local_action: command python {{ role_path }}/code/certtool.py gen-csr --key "{{ keys_path }}{{ key_name }}.key" --csr "{{ keys_path }}{{ key_name }}.csr" --domains "{{ ','.join(domains) }}" {% if ocsp_must_staple %}--must-staple{% endif %}
+    local_action: command python {{ role_path }}/code/certtool.py gen-csr --key "{{ keypath }}.key" --csr "{{ keypath }}.csr" --domains "{{ ','.join(domains) }}" {% if ocsp_must_staple %}--must-staple{% endif %}
     run_once: True
   tags:
   - issue-tls-certs-newkey
@@ -27,21 +42,21 @@
     local_action:
       module: get_url
       url: "{{ root_certificate }}"
-      dest: "{{ keys_path }}{{ key_name }}-root.pem"
+      dest: "{{ keypath }}-root.pem"
     run_once: True
 
   - name: "Get intermediate certificate for domains {{ ', '.join(domains) }}"
     local_action:
       module: get_url
       url: "{{ intermediate_certificate }}"
-      dest: "{{ keys_path }}{{ key_name }}-chain.pem"
+      dest: "{{ keypath }}-chain.pem"
     run_once: True
 
   - name: "Form root chain for domains {{ ', '.join(domains) }}"
     local_action:
       module: copy
-      dest: "{{ keys_path }}{{ key_name }}-rootchain.pem"
-      content: "{{ lookup('file', keys_path ~ key_name ~ '-root.pem') }}\n{{ lookup('file', keys_path ~ key_name ~ '-chain.pem') }}\n"
+      dest: "{{ keypath }}-rootchain.pem"
+      content: "{{ lookup('file', keypath ~ '-root.pem') }}\n{{ lookup('file', keypath ~ '-chain.pem') }}\n"
     run_once: True
   tags:
   - issue-tls-certs-newkey
@@ -52,8 +67,8 @@
   local_action:
     module: letsencrypt
     account_key: "{{ acme_account }}"
-    csr: "{{ keys_path }}{{ key_name }}.csr"
-    dest: "{{ keys_path }}{{ key_name }}.pem"
+    csr: "{{ keypath }}.csr"
+    dest: "{{ keypath }}.pem"
     account_email: "{{ acme_email }}"
     agreement: "{{ agreement }}"
     challenge: "{{ challenge }}"
@@ -67,19 +82,19 @@
 
 - block:
   # Set up HTTP challenges
-  - include: http-create.yml
+  - include_tasks: http-create.yml
     when: "challenge == 'http-01'"
 
   # Set up DNS challenges
-  - include: dns-{{ dns_provider }}-create.yml
+  - include_tasks: dns-{{ dns_provider }}-create.yml
     when: "challenge == 'dns-01'"
 
   - name: "Getting certificates for domains {{ ', '.join(domains) }}"
     local_action:
       module: letsencrypt
       account_key: "{{ acme_account }}"
-      csr: "{{ keys_path }}{{ key_name }}.csr"
-      dest: "{{ keys_path }}{{ key_name }}.pem"
+      csr: "{{ keypath }}.csr"
+      dest: "{{ keypath }}.pem"
       account_email: "{{ acme_email }}"
       agreement: "{{ agreement }}"
       challenge: "{{ challenge }}"
@@ -91,17 +106,17 @@
   - name: "Creating chained certificate for domains {{ ', '.join(domains) }}"
     local_action:
       module: copy
-      dest: "{{ keys_path }}{{ key_name }}-fullchain.pem"
-      content: "{{ lookup('file', keys_path ~ key_name ~ '.pem') }}\n{{ lookup('file', keys_path ~ key_name ~ '-chain.pem') }}\n"
+      dest: "{{ keypath }}-fullchain.pem"
+      content: "{{ lookup('file', keypath ~ '.pem') }}\n{{ lookup('file', keypath ~ '-chain.pem') }}\n"
     run_once: True
 
   always:
   # Clean up HTTP challenges
-  - include: http-cleanup.yml
+  - include_tasks: http-cleanup.yml
     when: "challenge == 'http-01'"
 
   # Clean up DNS challenges
-  - include: dns-{{ dns_provider }}-cleanup.yml
+  - include_tasks: dns-{{ dns_provider }}-cleanup.yml
     when: "challenge == 'dns-01'"
 
   tags:
@@ -112,10 +127,16 @@
 - name: "Verifying certificate for domains {{ ', '.join(domains) }}"
   local_action:
     module: command
-    _raw_params: openssl verify -CAfile "{{ keys_path }}{{ key_name }}-root.pem" -untrusted "{{ keys_path }}{{ key_name }}-chain.pem" "{{ keys_path }}{{ key_name }}.pem"
+    _raw_params: openssl verify -CAfile "{{ keypath }}-root.pem" -untrusted "{{ keypath }}-chain.pem" "{{ keypath }}.pem"
   changed_when: False
   run_once: True
   tags:
   - issue-tls-certs-newkey
   - issue-tls-certs
   - verify-tls-certs
+
+- name: Deploying the certificate
+  include_tasks: deploy-certs.yml
+  run_once: True
+  tags:
+  - deploy-certs

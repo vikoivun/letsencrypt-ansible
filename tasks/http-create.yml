@@ -1,6 +1,7 @@
 ---
 # Create up challenge files directory on server.
 - name: Creating challenge destination directory
+  become: yes
   file:
     dest: "{{ server_location }}"
     state: directory
@@ -13,6 +14,7 @@
 
 # Create challenge files on server.
 - name: Copying challenge files for domains {{ ', '.join(domains) }}"
+  become: yes
   copy:
     dest: "{{ server_location }}/{{ item.value[challenge].resource[('.well-known/acme-challenge/'|length):] }}"
     content: "{{ item.value[challenge].resource_value }}"
